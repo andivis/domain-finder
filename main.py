@@ -134,12 +134,13 @@ class DomainFinder:
         result = {}
 
         suffix = ' -https://companieshouse.gov.uk/ -https://www.linkedin.com/'
-        addressPart = getAddressForQuery(item)
+        addressPart = self.getAddressForQuery(item)
 
         # try with and without quotes
         queries = [
-            self.getQuery(item) + f'{addressPart} {suffix}',
-            item.get('Company Name', '') + f'{addressPart} {suffix}'
+            self.getQuery(item) + f' {addressPart} {suffix}',
+            item.get('Company Name', '') + f' {addressPart} {suffix}',
+            item.get('Company Name', '')
         ]
 
         for query in queries:
@@ -157,6 +158,11 @@ class DomainFinder:
                 'confidence': 0,
                 'maximumPossibleConfidence': -1
             }
+
+        fullName = item.get('Company Name', '')
+        url = result.get('url', '')
+        
+        logging.info(f'Result for {fullName}: {url}. Confidence {self.confidence} out of {self.maximumPossibleConfidence}.')
 
         return result
 
@@ -183,7 +189,7 @@ class DomainFinder:
         maximumDetailedTries = 7
 
         if '--debug' in sys.argv:
-            maximumDetailedTries = 0
+            maximumDetailedTries = 2
 
         previousDomain = ''
 
@@ -235,10 +241,8 @@ class DomainFinder:
                     'maximumPossibleConfidence': self.maximumPossibleConfidence
                 }
 
-                fullName = item.get('Company Name', '')
-
-                logging.info(f'Result for {fullName}: {domain}. Confidence {self.confidence} out of {self.maximumPossibleConfidence}.')
-
+                logging.debug('Stopping. Found result.')
+                
                 break
 
             if result:
@@ -376,7 +380,40 @@ class DomainFinder:
 
         return name
 
-    def
+    def getAddressForQuery(self, item):
+        address = item.get('Registered Address', '')
+        address = address.strip()
+
+        list = [
+            'england',
+            'united kingdom',
+            'uk',
+            'u.k.'
+        ]
+
+        address = self.getPartBeforeList(list, address)
+
+        return address
+
+    def getPartBeforeList(self, list, s):
+        result = s
+
+        minimumIndex = len(s)
+
+        for string in list:
+            if string in s.lower():
+                index = s.lower().index(string)
+
+                if index < minimumIndex:
+                    minimumIndex = index
+                    
+        s = s[0:minimumIndex]
+        s = s.strip()
+
+        if s.endswith(','):
+            s = s[0:-1]
+
+        return self.squeezeWhitespace(s)
 
     def squeezeWhitespace(self, s):
         return re.sub('\s\s+', " ", s)
@@ -389,7 +426,7 @@ class DomainFinder:
             return
 
         score = 0
-        numberOfResults = 5
+        numberOfResults = 3
 
         logging.debug(f'Checking {domain}')
 
@@ -748,15 +785,11 @@ class Main:
 
         id = item.get('Company Number', '')
 
-        #debug none part
-        row = self.database.getFirst('history', 'id', f"id = '{id}' and result = 'none'", '', '')
+        row = self.database.getFirst('history', 'id', f"id = '{id}'", '', '')
 
         if row:
             logging.info(f'Skipping. Already done this item.')
-            result = False #debug
-        #debug
-        else:
-            return True
+            result = True
 
         return result
 
@@ -875,7 +908,7 @@ class Main:
         }
 
         if '--debug' in sys.argv:
-            self.options['secondsBetweenItems'] = 1
+            self.options['secondsBetweenItems'] = 0
 
         # read the options file
         helpers.setOptions('options.ini', self.options)

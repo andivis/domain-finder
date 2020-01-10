@@ -327,7 +327,7 @@ def setUpLogging(fileNameSuffix):
     if '--debug' in sys.argv:
         # clear the file
         open(logFileName, 'w').close()
-        stream_handler.setLevel(logging.DEBUG)
+        #debug stream_handler.setLevel(logging.DEBUG)
 
     file_handler = logging.handlers.RotatingFileHandler(logFileName, maxBytes=1000 * 1000, backupCount=1, encoding='utf-8')
     file_handler.setFormatter(formatter)
@@ -429,7 +429,7 @@ def fileNameOnly(fileName, includeExtension):
     return result
 
 class Downloader:
-    def get(self, url):
+    def get(self, url, params=None):
         import requests
 
         userAgent = random.choice(self.userAgentList)
@@ -444,7 +444,7 @@ class Downloader:
 
         try:
             logging.debug(f'Getting {url}')
-            response = requests.get(url, headers=self.headers, proxies=self.proxies, timeout=10)
+            response = requests.get(url, params=params, headers=self.headers, proxies=self.proxies, timeout=10)
             response.encoding = 'utf-8'
             result = response.text
         except Exception as e:
