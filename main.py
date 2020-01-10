@@ -20,11 +20,17 @@ class Google:
         if not urlPrefix:
             urlPrefix = 'https://www.google.com'
 
-        query = query.replace(' ', '+')
+        parameters = {
+            'q': query,
+            'hl': 'en'
+        }
 
-        url = urlPrefix + '/search?q=' + query
+        url = urlPrefix + '/search'
 
-        page = self.downloader.get(url)
+        page = self.downloader.get(url, parameters)
+
+        if '--debug' in sys.argv:
+            helpers.toFile(page, 'logs/page.html')
 
         result = self.getSearchResults(page, query, numberOfResults, acceptAll)
 
@@ -125,11 +131,39 @@ class Google:
 
 class DomainFinder:
     def find(self, item):
-        result = {
-            'url': 'none',
-            'confidence': 0,
-            'maximumPossibleConfidence': -1
-        }
+        result = {}
+
+        suffix = ' -https://companieshouse.gov.uk/ -https://www.linkedin.com/'
+        addressPart = getAddressForQuery(item)
+
+        # try with and without quotes
+        queries = [
+            self.getQuery(item) + f'{addressPart} {suffix}',
+            item.get('Company Name', '') + f'{addressPart} {suffix}'
+        ]
+
+        for query in queries:
+            result = self.findByQuery(query, item)
+
+            if result:
+                break
+
+        if result == 'captcha':
+            result = {}
+        elif not result:
+            # could not find a result
+            result = {
+                'url': 'none',
+                'confidence': 0,
+                'maximumPossibleConfidence': -1
+            }
+
+        return result
+
+    def findByQuery(self, query, item):
+        result = {}
+
+        logging.debug(f'Trying query: {query}')
 
         name = item.get('Company Name', '').lower()
         name = name.strip()
@@ -137,60 +171,78 @@ class DomainFinder:
         # reset them
         self.google.extraAvoidDomains = []
 
-        maximumTries = 7
-
         # try several url's if necessary
-        urls = self.search(name, maximumTries, False, False)
+        urls = self.search(query, 20, False, False)
 
         if self.google.captchaOnLastSearch:
             logging.info('Skipping this item. Captcha during search.')
-            return {}
+            return 'captcha'
 
-        i = 0
+        measurementTypes = ['quick', 'detailed']
+
+        maximumDetailedTries = 7
+
+        if '--debug' in sys.argv:
+            maximumDetailedTries = 0
 
         previousDomain = ''
 
-        for url in urls:
-            self.testsPassed = 0
-            self.totalTests = 0
-            self.confidence = 0
-            self.maximumPossibleConfidence = 0
+        for measurementType in measurementTypes:
+            logging.debug('Measurement type: {measurementType}')
+            
+            i = 0
+            tries = 0
 
-            if not url:
-                i += 1
-                continue
+            for url in urls:
+                self.testsPassed = 0
+                self.totalTests = 0
+                self.confidence = 0
+                self.maximumPossibleConfidence = 0
 
-            if url == 'no results':
-                logging.error('Skipping. No search results for the company name.')
+                if measurementType == 'detailed' and tries >= maximumDetailedTries:
+                    logging.debug(f'Stopping. Tried {tries} times in detailed mode.')
+                    break
+
+                if not url:
+                    i += 1
+                    continue
+
+                if url == 'no results':
+                    logging.error('Skipping. No search results for the company name.')
+                    break
+
+                domain = helpers.getDomainName(url)
+                if domain == previousDomain:
+                    continue
+
+                previousDomain = domain
+
+                logging.debug(f'Trying result {i + 1} of {len(urls)}: {domain}')
+
+                self.measureConfidence(item, url, domain, measurementType)
+
+                tries += 1
+
+                if self.confidence < self.minimumConfidence:
+                    logging.info(f'Confidence is only {self.confidence}. Trying next candidate. On {i + 1} of {len(urls)}.')
+                    self.google.extraAvoidDomains.append(helpers.getDomainName(url))
+                    i += 1
+                    continue
+
+                result = {
+                    'url': self.getMainPart(url),
+                    'confidence': self.confidence,
+                    'maximumPossibleConfidence': self.maximumPossibleConfidence
+                }
+
+                fullName = item.get('Company Name', '')
+
+                logging.info(f'Result for {fullName}: {domain}. Confidence {self.confidence} out of {self.maximumPossibleConfidence}.')
+
                 break
 
-            domain = helpers.getDomainName(url)
-            if domain == previousDomain:
-                continue
-
-            previousDomain = domain
-
-            logging.debug(f'Trying result {i + 1} of {len(urls)}: {domain}')
-
-            self.measureConfidence(item, url, domain)
-
-            if self.confidence < self.minimumConfidence:
-                logging.info(f'Confidence is only {self.confidence}. Trying next candidate. On {i + 1} of {maximumTries}.')
-                self.google.extraAvoidDomains.append(helpers.getDomainName(url))
-                i += 1
-                continue
-
-            result = {
-                'url': self.getMainPart(url),
-                'confidence': self.confidence,
-                'maximumPossibleConfidence': self.maximumPossibleConfidence
-            }
-
-            fullName = item.get('Company Name', '')
-
-            logging.info(f'Result for {fullName}: {domain}. Confidence {self.confidence} out of {self.maximumPossibleConfidence}.')
-
-            break
+            if result:
+                break
 
         return result
 
@@ -216,10 +268,11 @@ class DomainFinder:
 
         return result
 
-    def measureConfidence(self, item, url, domain):
+    def measureConfidence(self, item, url, domain, measurementType):
         self.downloader.proxies = self.getRandomProxy()
 
         veryBasicDomain = helpers.findBetween(domain, '', '.')
+        veryBasicDomain = veryBasicDomain.replace('-', '')
 
         self.basicDomain = domain
 
@@ -231,12 +284,16 @@ class DomainFinder:
         score = 0        
         
         if domain.endswith(self.preferredDomain):
-            score = 150
+            score = 200
 
-        self.increaseConfidence(score, 150, f'The domain ends in {self.preferredDomain}.', f'domain ends in {self.preferredDomain}')
+        self.increaseConfidence(score, 200, f'The domain ends in {self.preferredDomain}.', f'domain ends in {self.preferredDomain}')
 
         # does the domain name contain the company name?
         self.domainContainsRightWords(item, veryBasicDomain)
+
+        # don't need to check everything in some cases
+        if measurementType == 'quick':
+            return
 
         # given company's address is on the site?
         score = 0
@@ -247,9 +304,9 @@ class DomainFinder:
 
         addressSearch = self.search(f'site:{domain} {address}', 1, False, False)
         if addressSearch and addressSearch != 'no results':
-            score = 200
+            score = 250
 
-        self.increaseConfidence(score, 200, f'The registered address appears on {url}.', 'address on website')
+        self.increaseConfidence(score, 250, f'The registered address appears on {url}.', 'address on website')
 
         self.checkWhois(domain, filteredName)
 
@@ -273,7 +330,7 @@ class DomainFinder:
             words = self.getWordsInName(basicName)
             maximumRun = self.wordsInARowTheSame(words, title, ' ')
 
-            self.increaseConfidence(maximumRun * 50, len(words) * 50, f'The title of {url} has {maximumRun} out of {len(words)} words in a row the same as {filteredName}. Title: {title}.', 'website title')
+            self.increaseConfidence(maximumRun * 100, len(words) * 100, f'The title of {url} has {maximumRun} out of {len(words)} words in a row the same as {filteredName}. Title: {title}.', 'website title')
 
             score = 0
 
@@ -289,7 +346,48 @@ class DomainFinder:
 
         self.increaseConfidence(score, 175, 'The domain from Google matches the domain from another service.', 'check')
 
+    def getQuery(self, item):
+        name = item.get('Company Name', '').lower()
+        name = name.strip()
+
+        # quote parts before these        
+        stringsToIgnore = [
+            ' limited',
+            ' ltd',
+            ' llc',
+            ' inc',
+            ' incorporated',
+            ' (',
+            '('
+        ]
+
+        minimumIndex = len(name)
+
+        for string in stringsToIgnore:
+            if string in name:
+                index = name.index(string)
+
+                if index < minimumIndex:
+                    minimumIndex = index
+                    
+        name = self.insert(name, minimumIndex, '" ')
+        name = '"' + name
+        name = self.squeezeWhitespace(name)
+
+        return name
+
+    def
+
+    def squeezeWhitespace(self, s):
+        return re.sub('\s\s+', " ", s)
+    
+    def insert(self, string, index, toInsert):
+        return string[:index] + toInsert + string[index:]
+
     def checkExternalDomain(self, domain, basicName, urlToFind):
+        if '--debug' in sys.argv:
+            return
+
         score = 0
         numberOfResults = 5
 
@@ -298,7 +396,7 @@ class DomainFinder:
         if '--debug' in sys.argv:
             numberOfResults = 2
 
-        urls = self.search(f'site:{domain} {basicName} {urlToFind}', numberOfResults, True, False)
+        urls = self.search(f'site:{domain} {basicName}', numberOfResults, True, False)
 
         matchingUrl = ''
 
@@ -420,7 +518,8 @@ class DomainFinder:
     def domainContainsRightWords(self, item, url):
         name = item.get('Company Name', '').lower()
         name = name.strip()
-        name = replace('&', ' and ')
+        name = name.replace('&', ' and ')
+        name = self.squeezeWhitespace(name)
 
         score = 0
         words = self.getWordsInName(name)
@@ -444,7 +543,7 @@ class DomainFinder:
             if maximumRun:
                 break
 
-        score = maximumRun * 100
+        score = maximumRun * 300
 
         self.increaseConfidence(score, len(words) * 50, f'{url} has {maximumRun} out of {len(words)} words in a row the same as {name}.', 'domain similar to company name')
 
@@ -649,11 +748,15 @@ class Main:
 
         id = item.get('Company Number', '')
 
-        row = self.database.getFirst('history', 'id', f"id = '{id}'", '', '')
+        #debug none part
+        row = self.database.getFirst('history', 'id', f"id = '{id}' and result = 'none'", '', '')
 
         if row:
             logging.info(f'Skipping. Already done this item.')
-            result = True
+            result = False #debug
+        #debug
+        else:
+            return True
 
         return result
 
@@ -783,7 +886,8 @@ class Main:
 
         self.items = helpers.getCsvFileAsDictionary(self.options['inputFile'])
 
-        random.shuffle(self.items)
+        if not '--debug' in sys.argv:
+            random.shuffle(self.items)
 
         if '--combine' in sys.argv:
             self.combine()
