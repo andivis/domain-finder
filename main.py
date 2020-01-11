@@ -115,7 +115,7 @@ class Google:
 
             domain = helpers.getDomainName(url)
 
-            if domain in self.avoidDomains or domain in self.extraAvoidDomains:
+            if domain in self.avoidDomains:
                 return True
 
         return result
@@ -126,7 +126,6 @@ class Google:
         self.captcha = False
         self.captchaOnLastSearch = False
         self.avoidDomains = []
-        self.extraAvoidDomains = []
 
 
 class DomainFinder:
@@ -143,15 +142,29 @@ class DomainFinder:
             item.get('Company Name', '')
         ]
 
+        urls = []
+
         for query in queries:
-            result = self.findByQuery(query, item)
+            urlsForQuery = self.search(query, 20)
+
+            urls = self.addIfNew(urls, urlsForQuery)
+
+            if self.captcha:
+                return {}
+
+        measurementTypes = ['quick', 'detailed']
+
+        # do a quick check and if necessary, a detailed check
+        for measurementType in measurementTypes:
+            result = self.checkUrls(urls, item, measurementType)
+
+            if self.captcha:
+                return {}
 
             if result:
                 break
 
-        if result == 'captcha':
-            result = {}
-        elif not result:
+        if not result:
             # could not find a result
             result = {
                 'url': 'none',
@@ -166,91 +179,90 @@ class DomainFinder:
 
         return result
 
-    def findByQuery(self, query, item):
+    def addIfNew(self, existingList, newList):
+        result = existingList
+
+        for item in newList:       
+            if not item in existingList:
+                result.append(item)
+
+        return result
+
+    def checkUrls(self, urls, item, measurementType):
         result = {}
 
-        logging.debug(f'Trying query: {query}')
-
-        name = item.get('Company Name', '').lower()
-        name = name.strip()
-
-        # reset them
-        self.google.extraAvoidDomains = []
-
-        # try several url's if necessary
-        urls = self.search(query, 20, False, False)
-
-        if self.google.captchaOnLastSearch:
-            logging.info('Skipping this item. Captcha during search.')
-            return 'captcha'
-
-        measurementTypes = ['quick', 'detailed']
-
+        minimumConfidenceToStopLooking = 500
         maximumDetailedTries = 7
 
         if '--debug' in sys.argv:
-            maximumDetailedTries = 2
+            maximumDetailedTries = 4
 
         previousDomain = ''
 
-        for measurementType in measurementTypes:
-            logging.debug('Measurement type: {measurementType}')
+        logging.debug('Measurement type: {measurementType}')
             
-            i = 0
-            tries = 0
+        i = 0
+        tries = 0
+        maximumConfidenceFoundSoFar = 0
 
-            for url in urls:
-                self.testsPassed = 0
-                self.totalTests = 0
-                self.confidence = 0
-                self.maximumPossibleConfidence = 0
+        # try several url's if necessary
+        for url in urls:
+            self.testsPassed = 0
+            self.totalTests = 0
+            self.confidence = 0
+            self.maximumPossibleConfidence = 0
 
-                if measurementType == 'detailed' and tries >= maximumDetailedTries:
-                    logging.debug(f'Stopping. Tried {tries} times in detailed mode.')
-                    break
+            if measurementType == 'detailed' and tries >= maximumDetailedTries:
+                logging.debug(f'Stopping. Tried {tries} times in detailed mode.')
+                break
 
-                if not url:
-                    i += 1
-                    continue
+            if not url:
+                i += 1
+                continue
 
-                if url == 'no results':
-                    logging.error('Skipping. No search results for the company name.')
-                    break
+            if url == 'no results':
+                continue
 
-                domain = helpers.getDomainName(url)
-                if domain == previousDomain:
-                    continue
+            domain = helpers.getDomainName(url)
 
-                previousDomain = domain
+            if domain == previousDomain:
+                continue
 
-                logging.debug(f'Trying result {i + 1} of {len(urls)}: {domain}')
+            previousDomain = domain
 
-                self.measureConfidence(item, url, domain, measurementType)
+            logging.debug(f'Trying result {i + 1} of {len(urls)}: {domain}')
 
-                tries += 1
+            self.measureConfidence(item, url, domain, measurementType)
 
-                if self.confidence < self.minimumConfidence:
-                    logging.info(f'Confidence is only {self.confidence}. Trying next candidate. On {i + 1} of {len(urls)}.')
-                    self.google.extraAvoidDomains.append(helpers.getDomainName(url))
-                    i += 1
-                    continue
+            tries += 1
 
+            if self.captcha:
+                return {}
+                
+            if self.confidence < self.minimumConfidence:
+                logging.info(f'Confidence is only {self.confidence}. Trying next candidate. On {i + 1} of {len(urls)}.')
+                i += 1
+                continue
+
+            # choose the best candidate
+            if self.confidence > maximumConfidenceFoundSoFar:
                 result = {
                     'url': self.getMainPart(url),
                     'confidence': self.confidence,
                     'maximumPossibleConfidence': self.maximumPossibleConfidence
                 }
 
-                logging.debug('Stopping. Found result.')
-                
-                break
+                maximumConfidenceFoundSoFar = self.confidence
 
-            if result:
+            if self.confidence >= minimumConfidenceToStopLooking:
+                logging.info(f'Confidence is at least {minimumConfidenceToStopLooking}. Not checking more candidates.')
                 break
 
         return result
 
-    def search(self, query, numberOfResults, acceptAll=False, trimToDomain=True):
+    def search(self, query, numberOfResults, acceptAll=False):
+        logging.debug(f'Searching for: {query}')
+
         self.google.downloader.proxies = self.getRandomProxy()
 
         searchUrl = self.defaultSearchUrl
@@ -258,17 +270,6 @@ class DomainFinder:
         result = self.google.search(query, numberOfResults, searchUrl, acceptAll)
 
         self.handleCaptcha()
-
-        if trimToDomain:
-            if numberOfResults == 1:
-                result = self.getMainPart(result)
-            else:
-                newResult = []
-
-                for item in result:
-                    newResult.append(self.getMainPart(item))
-
-                result = newResult
 
         return result
 
@@ -306,7 +307,7 @@ class DomainFinder:
         if 'c/o' in address.lower():
             address = helpers.findBetween(address, ', ', '')
 
-        addressSearch = self.search(f'site:{domain} {address}', 1, False, False)
+        addressSearch = self.search(f'site:{domain} {address}', 1, False)
         if addressSearch and addressSearch != 'no results':
             score = 250
 
@@ -396,8 +397,6 @@ class DomainFinder:
         return address
 
     def getPartBeforeList(self, list, s):
-        result = s
-
         minimumIndex = len(s)
 
         for string in list:
@@ -416,7 +415,7 @@ class DomainFinder:
         return self.squeezeWhitespace(s)
 
     def squeezeWhitespace(self, s):
-        return re.sub('\s\s+', " ", s)
+        return re.sub(r'\s\s+', " ", s)
     
     def insert(self, string, index, toInsert):
         return string[:index] + toInsert + string[index:]
@@ -433,7 +432,7 @@ class DomainFinder:
         if '--debug' in sys.argv:
             numberOfResults = 2
 
-        urls = self.search(f'site:{domain} {basicName}', numberOfResults, True, False)
+        urls = self.search(f'site:{domain} {basicName}', numberOfResults, True)
 
         matchingUrl = ''
 
@@ -558,17 +557,45 @@ class DomainFinder:
         name = name.replace('&', ' and ')
         name = self.squeezeWhitespace(name)
 
-        score = 0
         words = self.getWordsInName(name)
+
+        types = ['regular', 'abbreviations', 'initials']
+
+        maximumScore = 0
+        maximumRun = 0
+
+        # check both regular words and abbreviations. choose the highest scoring one.
+        for type in types:
+            if type == 'abbreviations':
+                words = self.getAbbreviations(words)
+            if type == 'initials':
+                words = self.getInitials(words)
+
+            object = self.domainContainsRightWordsByType(words, url)
+
+            if object['score'] > maximumScore:
+                maximumScore = object['score']
+                maximumRun = object['maximumRun']
+        
+        if maximumRun == len(words):
+            self.increaseConfidence(maximumScore, 500, f'All words match.', 'domain matches company name')
+        else:
+            self.increaseConfidence(maximumScore, len(words) * 50, f'{url} has {maximumRun} out of {len(words)} words in a row the same as {name}.', 'domain similar to company name')
+
+    def domainContainsRightWordsByType(self, words, url):
+        score = 0
 
         # exact match?
         if ''.join(words) == url:
             score = 500
 
-        self.increaseConfidence(score, 500, f'All words match.', 'domain matches company name')
-        
         if score > 0:
-            return
+            result = {
+                'score': score,
+                'maximumRun': len(words)
+            }
+
+            return result
 
         score = 0
         
@@ -582,11 +609,55 @@ class DomainFinder:
 
         score = maximumRun * 300
 
-        self.increaseConfidence(score, len(words) * 50, f'{url} has {maximumRun} out of {len(words)} words in a row the same as {name}.', 'domain similar to company name')
+        result = {
+            'score': score,
+            'maximumRun': maximumRun
+        }
+        
+        return result
+
+    def getAbbreviations(self, words):
+        result = []
+
+        abbreviations = {
+            'system': 'sys',
+            'systems': 'sys',
+            'company': 'co'
+        }
+
+        for word in words:
+            if word in abbreviations:
+                result.append(abbreviations[word])
+            else:
+                result.append(word)
+
+        return result
+
+    def getInitials(self, words):
+        result = []
+
+        ignore = [
+            'and',
+            '&',
+            'the',
+            'of',
+            'if',
+            'by',
+            'to'
+        ]
+
+        for word in words:
+            if word in ignore and len(word) > 0:
+                result.append(word[0])
+            else:
+                result.append(word)
+
+        return result
 
     def handleCaptcha(self):
         # so calling class knows it needs to retry
         if self.google.captcha:
+            logging.info('Skipping this item. Captcha during search.')
             self.captcha = True
 
     def getMainPart(self, url):
@@ -656,9 +727,6 @@ class DomainFinder:
 
         if options.get('ignorePatterns', ''):
             self.google.userAvoidPatterns += options['ignorePatterns']
-
-        self.extraAvoidDomains = []
-
 
 class Main:
     def run(self):
