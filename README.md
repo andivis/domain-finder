@@ -1,5 +1,9 @@
 # domain-finder
 
+## Video
+
+https://www.loom.com/share/4f43f11ce7e9405cb165874ac305e154
+
 ## Installation
 
 1. Make sure Python 3.6 or higher, pip and git are installed. For example, on Ubuntu run the commands below in a terminal.
