@@ -113,9 +113,28 @@ class Google:
             if helpers.substringIsInList(self.userAvoidPatterns, url):
                 return True
 
-            domain = helpers.getDomainName(url)
+            if self.domainMatchesList(url, self.userAvoidDomains):
+                return True
 
-            if domain in self.avoidDomains:
+            if self.domainMatchesList(url, self.avoidDomains):
+                return True
+
+        return result
+
+    def domainMatchesList(self, url, list):
+        result = False
+        
+        domain = helpers.getDomainName(url)
+
+        if domain in list:
+            logging.debug(f'Skipping. Domain is {domain}.')
+            return True
+
+        for item in list:
+            toFind = f'.{item}'
+            
+            if domain.endswith(toFind):
+                logging.debug(f'Skipping. Domain ends with {item}.')
                 return True
 
         return result
@@ -126,6 +145,8 @@ class Google:
         self.captcha = False
         self.captchaOnLastSearch = False
         self.avoidDomains = []
+        self.userAvoidPatterns = []
+        self.userAvoidDomains = []
 
 
 class DomainFinder:
@@ -557,18 +578,24 @@ class DomainFinder:
         name = name.replace('&', ' and ')
         name = self.squeezeWhitespace(name)
 
-        words = self.getWordsInName(name)
-
         types = ['regular', 'abbreviations', 'initials']
 
         maximumScore = 0
         maximumRun = 0
+        words = self.getWordsInName(name)        
+        wordLengthForMaximum = len(words)
 
         # check both regular words and abbreviations. choose the highest scoring one.
         for type in types:
+            # reset it in case it changed
+            words = self.getWordsInName(name)
+
             if type == 'abbreviations':
                 words = self.getAbbreviations(words)
             if type == 'initials':
+                if len(words) < 2:
+                    continue
+
                 words = self.getInitials(words)
 
             object = self.domainContainsRightWordsByType(words, url)
@@ -576,11 +603,12 @@ class DomainFinder:
             if object['score'] > maximumScore:
                 maximumScore = object['score']
                 maximumRun = object['maximumRun']
+                wordLengthForMaximum = len(words)
         
-        if maximumRun == len(words):
+        if maximumRun == wordLengthForMaximum:
             self.increaseConfidence(maximumScore, 500, f'All words match.', 'domain matches company name')
         else:
-            self.increaseConfidence(maximumScore, len(words) * 50, f'{url} has {maximumRun} out of {len(words)} words in a row the same as {name}.', 'domain similar to company name')
+            self.increaseConfidence(maximumScore, wordLengthForMaximum * 300, f'{url} has {maximumRun} out of {wordLengthForMaximum} words in a row the same as {name}.', 'domain similar to company name')
 
     def domainContainsRightWordsByType(self, words, url):
         score = 0
@@ -647,7 +675,7 @@ class DomainFinder:
         ]
 
         for word in words:
-            if word in ignore and len(word) > 0:
+            if not word in ignore and len(word) > 0:
                 result.append(word[0])
             else:
                 result.append(word)
@@ -723,10 +751,11 @@ class DomainFinder:
         ]
 
         # set by the user
-        self.google.userAvoidPatterns = []
-
         if options.get('ignorePatterns', ''):
-            self.google.userAvoidPatterns += options['ignorePatterns']
+            self.google.userAvoidPatterns = options['ignorePatterns']
+
+        if options.get('ignoreDomains', ''):
+            self.google.userAvoidDomains = options['ignoreDomains']
 
 class Main:
     def run(self):
@@ -970,8 +999,9 @@ class Main:
             'maximumDaysToKeepItems': 90,
             'defaultSearchUrl': '',
             'minimumConfidence': 500,
-            'ignorePatterns': '',
             'preferredDomain': '',
+            'ignorePatterns': '',
+            'ignoreDomains': '',
             'proxyListUrl': helpers.getFile('resources/resource')
         }
 
@@ -982,6 +1012,7 @@ class Main:
         helpers.setOptions('options.ini', self.options)
 
         self.options['ignorePatterns'] = self.options['ignorePatterns'].split(',')
+        self.options['ignoreDomains'] = self.options['ignoreDomains'].split(',')
 
         self.domainFinder = DomainFinder(self.options)
 
