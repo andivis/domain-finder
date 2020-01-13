@@ -43,6 +43,7 @@ sudo apt install -y git
 git clone https://github.com/andivis/domain-finder.git
 cd domain-finder
 pip3 install lxml
+pip3 install brotlipy
 ```
 
 ## Instructions
