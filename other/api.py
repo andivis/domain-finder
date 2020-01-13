@@ -14,7 +14,7 @@ from collections import OrderedDict
 from . import helpers
 
 class Api:
-    def get(self, url, parameters={}, responseIsJson=True):
+    def get(self, url, parameters=None, responseIsJson=True):
         import requests
 
         result = ''
@@ -35,7 +35,7 @@ class Api:
                 if self.proxies and 'localhost:' in self.proxies.get('http', ''):
                     verify = False
 
-                fileName = self.getCacheFileName(url)
+                fileName = self.getCacheFileName(url, responseIsJson)
 
                 if not '--noCache' in sys.argv and os.path.exists(fileName):
                     logging.info('Using cached version')
@@ -66,7 +66,7 @@ class Api:
         return result
 
     def getPlain(self, url):
-        return self.get(url, {}, False)
+        return self.get(url, None, False)
 
     def post(self, url, data, responseIsJson=True):
         import requests
@@ -91,7 +91,7 @@ class Api:
                     verify = False
                 
                 # don't want to read files for post, just write them
-                fileName = self.getCacheFileName(url)
+                fileName = self.getCacheFileName(url, responseIsJson)
 
             response = requests.post(self.urlPrefix + url, headers=self.headers, proxies=self.proxies, data=data, timeout=15, verify=verify)
 
@@ -110,7 +110,7 @@ class Api:
 
         return result
 
-    def getCacheFileName(self, url):
+    def getCacheFileName(self, url, responseIsJson):
         result = ''
 
         file = helpers.getFile('logs/cache.txt')
@@ -130,7 +130,12 @@ class Api:
             for i in range(0, 16):  
                 fileName += str(random.randrange(0, 10))
             
-            result = f'logs/cache/{fileName}.json'
+            extension = 'json'
+
+            if not responseIsJson:
+                extension = 'html'
+
+            result = f'logs/cache/{fileName}.{extension}'
 
         helpers.makeDirectory('logs/cache')
 
@@ -206,7 +211,7 @@ class Api:
             logging.debug(traceback.format_exc())
 
     def getHeadersFromFile(self, fileName):
-        file = getFile(fileName)
+        file = helpers.getFile(fileName)
 
         if not file:
             return
@@ -232,7 +237,7 @@ class Api:
         return OrderedDict(newHeaders)
 
     def randomizeHeaders(self):
-        number = random.randrange(1, 3)
+        number = random.randrange(1, 2)
 
         self.headers = self.getHeadersFromFile(f'resources/headers-{number}.txt')
 

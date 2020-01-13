@@ -15,7 +15,8 @@ from other.database import Database
 
 class Google:
     def search(self, query, numberOfResults, urlPrefix=None, acceptAll=False):
-        self.captchaOnLastSearch = False        
+        self.captcha = False        
+        self.searchFailed = False        
 
         if not urlPrefix:
             urlPrefix = 'https://www.google.com'
@@ -27,7 +28,11 @@ class Google:
 
         url = urlPrefix + '/search'
 
-        page = self.api.get(url, parameters)
+        page = self.api.get(url, parameters, False)
+
+        if not page:
+            self.searchFailed = True
+            return []
 
         if '--debug' in sys.argv:
             helpers.toFile(page, 'logs/page.html')
@@ -44,8 +49,7 @@ class Google:
 
         if 'detected unusual traffic from your computer network.' in page:
             logging.error(f'There is a captcha')
-            self.captcha = True
-            self.captchaOnLastSearch = False
+            self.captcha = False
             return result
 
         if 'google.' in page and 'did not match any documents' in page:
@@ -147,7 +151,6 @@ class Google:
         self.downloader = Downloader()
         self.proxies = None
         self.captcha = False
-        self.captchaOnLastSearch = False
         self.avoidDomains = []
         self.userAvoidPatterns = []
         self.userAvoidDomains = []
@@ -156,6 +159,9 @@ class Google:
 class DomainFinder:
     def find(self, item):
         result = {}
+
+        self.captcha = False
+        self.searchFailed = False
 
         suffix = ' -https://companieshouse.gov.uk/ -https://www.linkedin.com/'
         addressPart = self.getAddressForQuery(item)
@@ -174,7 +180,7 @@ class DomainFinder:
 
             urls = self.addIfNew(urls, urlsForQuery)
 
-            if self.captcha:
+            if self.captcha or self.searchFailed:
                 return {}
 
         measurementTypes = ['quick', 'detailed']
@@ -224,7 +230,7 @@ class DomainFinder:
 
         previousDomain = ''
 
-        logging.debug('Measurement type: {measurementType}')
+        logging.debug(f'Measurement type: {measurementType}')
             
         i = 0
         tries = 0
@@ -294,7 +300,7 @@ class DomainFinder:
 
         result = self.google.search(query, numberOfResults, searchUrl, acceptAll)
 
-        self.handleCaptcha()
+        self.handleErrors(result)
 
         return result
 
@@ -686,7 +692,11 @@ class DomainFinder:
 
         return result
 
-    def handleCaptcha(self):
+    def handleErrors(self, result):
+        if result == '':
+            logging.info('Skipping this item. A search failed.')
+            self.searchFailed = True
+
         # so calling class knows it needs to retry
         if self.google.captcha:
             logging.info('Skipping this item. Captcha during search.')
@@ -714,14 +724,14 @@ class DomainFinder:
         api = Api('https://api.myprivateproxy.net')
 
         # get allowed ip's
-        allowedIps = api.get(f'/v1/fetchAuthIP/{apiKey}', True)
+        allowedIps = api.get(f'/v1/fetchAuthIP/{apiKey}')
 
         if not allowedIps:
             return result
 
         ipInfoApi = Api('')
 
-        currentIp = ipInfoApi.get('https://ipinfo.io/json', True)
+        currentIp = ipInfoApi.get('https://ipinfo.io/json')
 
         if not currentIp or not currentIp.get('ip', ''):
             logging.error('Can\'t find current ip address')
@@ -741,7 +751,7 @@ class DomainFinder:
             if response.get('result', '') != 'Success':
                 logging.error('Failed to update allowed ip addresses')
 
-        response = api.get(f'/v1/fetchProxies/json/full/{apiKey}', True)
+        response = api.get(f'/v1/fetchProxies/json/full/{apiKey}')
 
         if not response:
             return result
@@ -795,12 +805,13 @@ class DomainFinder:
         return proxies
 
     def __init__(self, options):
-        self.api = Api()
+        self.api = Api('')
         self.downloader = Downloader()
         self.google = Google()
         self.proxies = None
         self.defaultSearchUrl = options.get('defaultSearchUrl', '')
         self.captcha = False
+        self.searchFailed = False
         self.minimumConfidence = options.get('minimumConfidence', '')
         self.preferredDomain = options.get('preferredDomain', '')
         self.proxyListUrl = options.get('proxyListUrl', '')
@@ -1028,7 +1039,7 @@ class Main:
         time.sleep(secondsBetweenItems)
 
     def deleteResultsToAvoid(self):
-        self.database.execute("select * from history where instr(url, 'uk-bus') > 0 )")
+        self.database.execute("select * from history where instr(result, 'uk-bus') > 0")
 
     def cleanUp(self):
         self.database.close()
