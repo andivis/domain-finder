@@ -346,15 +346,7 @@ class DomainFinder:
 
         self.checkWhois(domain, filteredName)
 
-        # does the company have social media pages that link to the given url?
-        externalDomains = [
-            'facebook.com',
-            'instagram.com',
-            'twitter.com'
-        ]
-
-        for externalDomain in externalDomains:
-            self.checkExternalDomain(externalDomain, basicName, domain)
+        self.checkExternalDomains(domain, basicName)
 
         # title of the site has the given company name?
         page = self.api.getPlain(url)
@@ -364,7 +356,7 @@ class DomainFinder:
             self.increaseConfidence(200, 200, 'Found {filteredName} in title of {url}', 'website title')
         else:
             words = self.getWordsInName(basicName)
-            maximumRun = self.wordsInARowTheSame(words, title, ' ')
+            maximumRun = self.wordsInARowTheSame(words, title, ' ', False)
 
             self.increaseConfidence(maximumRun * 100, len(words) * 100, f'The title of {url} has {maximumRun} out of {len(words)} words in a row the same as {filteredName}. Title: {title}.', 'website title')
 
@@ -381,6 +373,36 @@ class DomainFinder:
             score = 175
 
         self.increaseConfidence(score, 175, 'The domain from Google matches the domain from another service.', 'check')
+
+    def checkExternalDomains(self, domain, basicName):
+        # does the company have social media pages?
+        externalDomains = [
+            'facebook.com',
+            'instagram.com',
+            'twitter.com'
+        ]
+
+        for externalDomain in externalDomains:
+            self.checkExternalDomain(externalDomain, basicName, domain)
+
+    def getWebsiteLinksInSocialMediaPage(self, url):
+        results = []
+
+        xpaths = {
+            'facebook.com': "//a[@target = '_blank' and not(contains(@href, 'facebook.com/'))]"
+        }
+
+        socialMediaDomain = helpers.getDomainName(url)
+
+        xpath = xpaths.get(socialMediaDomain, '')
+
+        if not xpath:
+            return results
+
+        page = self.api.getPlain(url)
+        results = self.downloader.getXpath(page, xpath, True, 'href')
+
+        return results
 
     def getQuery(self, item):
         name = item.get('Company Name', '').lower()
@@ -452,9 +474,6 @@ class DomainFinder:
         return string[:index] + toInsert + string[index:]
 
     def checkExternalDomain(self, domain, basicName, urlToFind):
-        if '--debug' in sys.argv:
-            return
-
         score = 0
         numberOfResults = 3
 
@@ -467,6 +486,7 @@ class DomainFinder:
 
         matchingUrl = ''
 
+        # check if those pages contain a given domain
         for url in urls:
             if url == 'no results':
                 break
@@ -567,7 +587,7 @@ class DomainFinder:
 
         return ' '.join(words)
 
-    def wordsInARowTheSame(self, words, toCompare, joinString):
+    def wordsInARowTheSame(self, words, toCompare, joinString, mustStartWith):
         result = 0
 
         toCompare = toCompare.lower()
@@ -576,9 +596,14 @@ class DomainFinder:
         for i in range(len(words), -1, -1):
             line = joinString.join(words[0:i])
 
-            if line in toCompare and i > result:
-                result = i
-                break
+            if mustStartWith:
+                if toCompare.startswith(line) and i > result:
+                    result = i
+                    break            
+            else:
+                if line in toCompare and i > result:
+                    result = i
+                    break
 
         return result
 
@@ -608,7 +633,7 @@ class DomainFinder:
 
                 words = self.getInitials(words)
 
-            object = self.domainContainsRightWordsByType(words, url)
+            object = self.domainContainsRightWordsByType(words, url, type)
 
             if object['score'] > maximumScore:
                 maximumScore = object['score']
@@ -620,7 +645,7 @@ class DomainFinder:
         else:
             self.increaseConfidence(maximumScore, wordLengthForMaximum * 300, f'{url} has {maximumRun} out of {wordLengthForMaximum} words in a row the same as {name}.', 'domain similar to company name')
 
-    def domainContainsRightWordsByType(self, words, url):
+    def domainContainsRightWordsByType(self, words, url, type):
         score = 0
 
         # exact match?
@@ -640,11 +665,24 @@ class DomainFinder:
         # is similar at least?
         # try to find matchings run starting at word 1, then word 2, etc.
         for i in range(0, len(words)):
-            maximumRun = self.wordsInARowTheSame(words[i:], url, '')
+            mustStartWith = False
+
+            if type == 'initials':
+                mustStartWith = True
+
+            maximumRun = self.wordsInARowTheSame(words[i:], url, '', mustStartWith)
+
+            # url must start the initials
+            if type == 'initials' and i > 0:
+                break
 
             if maximumRun:
                 break
 
+        # want at least 2 initials in a row
+        if type == 'initials' and maximumRun < 2:
+            maximumRun = 0
+        
         score = maximumRun * 300
 
         result = {
@@ -1039,7 +1077,20 @@ class Main:
         time.sleep(secondsBetweenItems)
 
     def deleteResultsToAvoid(self):
-        self.database.execute("select * from history where instr(result, 'uk-bus') > 0")
+        rows = self.database.get('history', '*', "result != 'none'", '', '')
+
+        for row in rows:
+            url = row.get('result', '')
+
+            shouldDelete = self.domainFinder.google.shouldAvoid(url, False)
+
+            if shouldDelete:
+                id = row.get('id', '')
+                name = row.get('name', '')
+
+                logging.info(f'Deleting result for {name} because it matches a pattern to ignore. Url: {url}.')
+
+                self.database.execute(f"delete from history where id = '{id}'")
 
     def cleanUp(self):
         self.database.close()
