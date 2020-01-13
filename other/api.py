@@ -10,6 +10,7 @@ import configparser
 import datetime
 import json
 import traceback
+import urllib.parse
 from collections import OrderedDict
 from . import helpers
 
@@ -35,7 +36,7 @@ class Api:
                 if self.proxies and 'localhost:' in self.proxies.get('http', ''):
                     verify = False
 
-                fileName = self.getCacheFileName(url, responseIsJson)
+                fileName = self.getCacheFileName(url, parameters, responseIsJson)
 
                 if not '--noCache' in sys.argv and os.path.exists(fileName):
                     logging.info('Using cached version')
@@ -91,7 +92,7 @@ class Api:
                     verify = False
                 
                 # don't want to read files for post, just write them
-                fileName = self.getCacheFileName(url, responseIsJson)
+                fileName = self.getCacheFileName(url, {}, responseIsJson)
 
             response = requests.post(self.urlPrefix + url, headers=self.headers, proxies=self.proxies, data=data, timeout=15, verify=verify)
 
@@ -110,16 +111,21 @@ class Api:
 
         return result
 
-    def getCacheFileName(self, url, responseIsJson):
+    def getCacheFileName(self, url, parameters, responseIsJson):
         result = ''
 
         file = helpers.getFile('logs/cache.txt')
+
+        urlToFind = url
+       
+        if parameters:
+            urlToFind += '?' + urllib.parse.urlencode(parameters)
 
         for line in file.splitlines():
             fileName = helpers.findBetween(line, '', ' ')
             lineUrl = helpers.findBetween(line, ' ', '')
 
-            if lineUrl == url:
+            if lineUrl == urlToFind:
                 result = fileName
                 break
 

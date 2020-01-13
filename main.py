@@ -406,7 +406,10 @@ class DomainFinder:
 
     def getQuery(self, item):
         name = item.get('Company Name', '').lower()
+        # in case a space is missing
+        name = name.replace(',', ', ')
         name = name.strip()
+        name = self.squeezeWhitespace(name)
 
         # quote parts before these        
         stringsToIgnore = [
