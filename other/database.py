@@ -251,6 +251,8 @@ class Database:
 
     def insert(self, table, item):
         try:
+            logging.debug(f'Inserting into database: {item}')
+
             if not item:
                 return
 

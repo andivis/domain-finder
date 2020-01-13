@@ -67,6 +67,9 @@ def substringIsInList(list, s):
 def numbersOnly(s):
     return ''.join(filter(lambda x: x.isdigit(), s))
 
+def lettersAndNumbersOnly(s):
+    return ''.join(filter(lambda x: x.isdigit() or x.isalpha(), s))
+
 def fixedDecimals(n, numberOfDecimalPlaces):
     result = ''
 
@@ -87,37 +90,44 @@ def findBetween(s, first, last):
 
     end = len(s)
         
-    if last and last in s:
+    if last and last in s[start:]:
         end = s.index(last, start)
 
     return s[start:end]
 
 def getNested(j, keys):
+    result = ''
+
     try:
         element = j
 
         i = 0
 
         for key in keys:
+            if not element:
+                break
+
             if not key in element:
                 break
             
             element = element[key]
 
-            if i == len(keys - 1):
+            if i == len(keys) - 1:
                 return element
 
             i += 1
     except:
-        return ""
+        return ''
+
+    return result
 
 def stringToFloatingPoint(s):
     result = 0.0
 
-    temporary = ""
+    temporary = ''
 
     for c in s:
-        if c.isdigit() or c == ".":
+        if c.isdigit() or c == '.':
             temporary += c
 
     try:
@@ -201,7 +211,7 @@ def getUrl(url):
 def sleep(seconds):
     time.sleep(int(seconds))
 
-def setOptions(fileName, options):
+def setOptions(fileName, options, sectionName='main'):
     try:
         if '--optionsFile' in sys.argv:
             index = sys.argv.index('--optionsFile')
@@ -209,21 +219,42 @@ def setOptions(fileName, options):
                 fileName = sys.argv[index + 1]
 
         optionsReader = configparser.ConfigParser()
+        optionsReader.optionxform = str 
         optionsReader.read(fileName)
 
-        if not 'main' in optionsReader:
-            return
+        for section in optionsReader.sections():
+            if sectionName and section != sectionName:
+                continue
 
-        for key in options:
-            if key in optionsReader['main']:
-                if optionsReader['main'][key].isdigit():
-                    options[key] = int(optionsReader['main'][key])
+            if not sectionName:
+                options[section] = {}
+
+            for key in optionsReader[section]:
+                # default value is digit?
+                if isinstance(options.get(key, ''), int):
+                    if not sectionName:                    
+                        options[section][key] = int(optionsReader[section][key])
+                    else:
+                        options[key] = int(optionsReader[section][key])
                 else:
-                    options[key] = optionsReader['main'][key]
+                    if not sectionName:
+                        options[section][key] = optionsReader[section][key]
+                    else:
+                        options[key] = optionsReader[section][key]
     except Exception as e:
         logging.error(e)
 
-def getArgument(name, required, default=''):
+def getParameterIfExists(self, existingValue, parameterName):
+    result = existingValue
+
+    if not parameterName in sys.argv:
+        return
+
+    result = helpers.getParameter(parameterName, False)
+
+    return result
+
+def getParameter(name, required, default=''):
     result = default
 
     try:
@@ -364,62 +395,6 @@ def getDomainName(url):
 
     return result
 
-class Api:
-    def get(self, url):
-        import requests
-
-        result = ''
-
-        try:
-            logging.debug(f'Get {url}')
-
-            response = requests.get(self.urlPrefix + url, headers=self.headers, proxies=self.proxies, timeout=10)
-
-            result = json.loads(response.text)
-        except Exception as e:
-            logging.error(e)
-
-        return result
-
-    def post(self, url, data, responseIsJson=True):
-        import requests
-        
-        result = ''
-
-        try:
-            logging.debug(f'Post {url}')
-
-            response = requests.post(self.urlPrefix + url, headers=self.headers, proxies=self.proxies, data=data, timeout=10)
-
-            if responseIsJson:
-                result = json.loads(response.text)
-            else:
-                result = response.text
-        except Exception as e:
-            logging.error(e)
-
-        return result
-
-    def __init__(self, urlPrefix):
-        self.urlPrefix = urlPrefix
-
-        self.userAgentList = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:71.0) Gecko/20100101 Firefox/71.0"
-        ]
-
-        userAgent = random.choice(self.userAgentList)
-
-        self.headers = OrderedDict([
-            ('user-agent', userAgent),
-            ('accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'),
-            ('accept-language', 'en-US,en;q=0.5'),
-            ('dnt', '1'),
-            ('upgrade-insecure-requests', '1'),
-            ('te', 'trailers')
-        ])
-
-        self.proxies = None
-        
 def fileNameOnly(fileName, includeExtension):
     result = os.path.basename(fileName)
 
@@ -432,19 +407,11 @@ class Downloader:
     def get(self, url, params=None):
         import requests
 
-        userAgent = random.choice(self.userAgentList)
-        
-        self.headers = OrderedDict([
-            ('user-agent', userAgent),
-            ('accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9'),
-            ('accept-language', 'en-US,en;q=0.9')
-        ])
-
         result = ''
 
         try:
             logging.debug(f'Getting {url}')
-            response = requests.get(url, params=params, headers=self.headers, proxies=self.proxies, timeout=10)
+            response = requests.get(url, params=params, headers=self.headers, proxies=self.proxies, timeout=15)
             response.encoding = 'utf-8'
             result = response.text
         except Exception as e:
@@ -518,11 +485,19 @@ class Downloader:
         return result
 
     def __init__(self):
+        self.proxies = None
+
         self.userAgentList = [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.88 Safari/537.36'
         ]
 
-        self.proxies = None
+        userAgent = random.choice(self.userAgentList)
+
+        self.headers = OrderedDict([
+            ('user-agent', userAgent),
+            ('accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9'),
+            ('accept-language', 'en-US,en;q=0.9')
+        ])
 
 def listFiles(directory, includeDirectories=True):
     result = []

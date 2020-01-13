@@ -7,16 +7,16 @@ import re
 import lxml.html as lh
 import traceback
 import os
-import helpers
-from helpers import Downloader
-from helpers import Api
-from database import Database
-
+import json
+import other.helpers as helpers
+from other.helpers import Downloader
+from other.api import Api
+from other.database import Database
 
 class Google:
     def search(self, query, numberOfResults, urlPrefix=None, acceptAll=False):
-        self.captchaOnLastSearch = False
-        
+        self.captchaOnLastSearch = False        
+
         if not urlPrefix:
             urlPrefix = 'https://www.google.com'
 
@@ -27,7 +27,7 @@ class Google:
 
         url = urlPrefix + '/search'
 
-        page = self.downloader.get(url, parameters)
+        page = self.api.get(url, parameters)
 
         if '--debug' in sys.argv:
             helpers.toFile(page, 'logs/page.html')
@@ -111,12 +111,15 @@ class Google:
 
         if not acceptAll:
             if helpers.substringIsInList(self.userAvoidPatterns, url):
+                logging.debug(f'Avoiding {url}. It\'s in userAvoidPatterns.')
                 return True
 
             if self.domainMatchesList(url, self.userAvoidDomains):
+                logging.debug(f'Avoiding {url}. It\'s in userAvoidDomains.')
                 return True
 
             if self.domainMatchesList(url, self.avoidDomains):
+                logging.debug(f'Avoiding {url}. It\'s in avoidDomains.')
                 return True
 
         return result
@@ -140,6 +143,7 @@ class Google:
         return result
 
     def __init__(self):
+        self.api = Api('')
         self.downloader = Downloader()
         self.proxies = None
         self.captcha = False
@@ -284,7 +288,7 @@ class DomainFinder:
     def search(self, query, numberOfResults, acceptAll=False):
         logging.debug(f'Searching for: {query}')
 
-        self.google.downloader.proxies = self.getRandomProxy()
+        self.google.api.proxies = self.getRandomProxy()
 
         searchUrl = self.defaultSearchUrl
 
@@ -295,7 +299,7 @@ class DomainFinder:
         return result
 
     def measureConfidence(self, item, url, domain, measurementType):
-        self.downloader.proxies = self.getRandomProxy()
+        self.api.proxies = self.getRandomProxy()
 
         veryBasicDomain = helpers.findBetween(domain, '', '.')
         veryBasicDomain = veryBasicDomain.replace('-', '')
@@ -347,7 +351,7 @@ class DomainFinder:
             self.checkExternalDomain(externalDomain, basicName, domain)
 
         # title of the site has the given company name?
-        page = self.downloader.get(url)
+        page = self.api.getPlain(url)
         title = self.downloader.getXpath(page, "//title", True)
 
         if filteredName in title.lower():
@@ -461,7 +465,7 @@ class DomainFinder:
             if url == 'no results':
                 break
 
-            self.downloader.proxies = self.getRandomProxy()
+            self.api.proxies = self.getRandomProxy()
 
             if self.urlContainsText(url, urlToFind):
                 matchingUrl = url
@@ -483,7 +487,7 @@ class DomainFinder:
 
         logging.debug('Checking {url}')
 
-        page = self.downloader.get(url)
+        page = self.api.getPlain(url)
 
         # to avoid false matches
         page = page.replace(domain, '')
@@ -497,7 +501,7 @@ class DomainFinder:
         self.increaseConfidence(score, 300, f'The whois record for {domain} contains {filteredName}.', 'whois')
 
     def urlContainsText(self, url, text):
-        page = self.downloader.get(url)
+        page = self.api.getPlain(url)
 
         return text in page.lower()
 
@@ -698,15 +702,73 @@ class DomainFinder:
 
         return result
 
+    def getProxiesFromApi(self):
+        result = None
+
+        externalApi = Api('')
+        apiKey = externalApi.getPlain(self.proxyListUrl)
+
+        if not apiKey:
+            return result
+
+        api = Api('https://api.myprivateproxy.net')
+
+        # get allowed ip's
+        allowedIps = api.get(f'/v1/fetchAuthIP/{apiKey}', True)
+
+        if not allowedIps:
+            return result
+
+        ipInfoApi = Api('')
+
+        currentIp = ipInfoApi.get('https://ipinfo.io/json', True)
+
+        if not currentIp or not currentIp.get('ip', ''):
+            logging.error('Can\'t find current ip address')
+            return result
+
+        currentIp = currentIp.get('ip', '')
+
+        # check if it's already allowed
+        if not currentIp in allowedIps:
+            toKeep = 3
+            newAllowedIps = allowedIps[0:toKeep]
+            newAllowedIps.append(currentIp)
+
+            # add current ip to allowed ip's
+            response = api.post(f'/v1/updateAuthIP/{apiKey}', json.dumps(newAllowedIps))
+
+            if response.get('result', '') != 'Success':
+                logging.error('Failed to update allowed ip addresses')
+
+        response = api.get(f'/v1/fetchProxies/json/full/{apiKey}', True)
+
+        if not response:
+            return result
+
+        result = []
+
+        for item in response:
+            newItem = {
+                'url': item.get('proxy_ip', ''),
+                'port': item.get('proxy_port', ''),
+                'username': item.get('username', ''),
+                'password': item.get('password', ''),
+            }
+
+            result.append(newItem)
+
+        return result
+
     def getRandomProxy(self):
         if not self.proxies:
             if os.path.exists('proxies.csv'):
                 self.proxies = helpers.getCsvFileAsDictionary('proxies.csv')
             elif self.proxyListUrl:            
-                file = self.downloader.get(self.proxyListUrl)
-                helpers.toFile(file, 'resources/list.csv')
-                self.proxies = helpers.getCsvFileAsDictionary('resources/list.csv')
-                os.remove('resources/list.csv')
+                self.proxies = self.getProxiesFromApi()
+
+            if not self.proxies:
+                logging.info('No proxies found')
 
         if not self.proxies:
             return None
@@ -733,6 +795,7 @@ class DomainFinder:
         return proxies
 
     def __init__(self, options):
+        self.api = Api()
         self.downloader = Downloader()
         self.google = Google()
         self.proxies = None
@@ -741,6 +804,10 @@ class DomainFinder:
         self.minimumConfidence = options.get('minimumConfidence', '')
         self.preferredDomain = options.get('preferredDomain', '')
         self.proxyListUrl = options.get('proxyListUrl', '')
+        self.testsPassed = 0
+        self.totalTests = 0
+        self.confidence = 0
+        self.maximumPossibleConfidence = 0
 
         file = helpers.getFile('resources/top-domains.csv')
         self.google.avoidDomains = file.splitlines()
@@ -960,6 +1027,9 @@ class Main:
 
         time.sleep(secondsBetweenItems)
 
+    def deleteResultsToAvoid(self):
+        self.database.execute("select * from history where instr(url, 'uk-bus') > 0 )")
+
     def cleanUp(self):
         self.database.close()
 
@@ -969,8 +1039,8 @@ class Main:
     def initialize(self):
         logFileNameSuffix = ''
 
-        self.threadNumber = helpers.getArgument('--threadNumber', False, 1)
-        self.threadCount = helpers.getArgument('--threadCount', False, 1)
+        self.threadNumber = helpers.getParameter('--threadNumber', False, 1)
+        self.threadCount = helpers.getParameter('--threadCount', False, 1)
 
         if self.threadCount:
             self.threadNumber = int(self.threadNumber)
@@ -1017,6 +1087,8 @@ class Main:
         self.domainFinder = DomainFinder(self.options)
 
         self.items = helpers.getCsvFileAsDictionary(self.options['inputFile'])
+
+        self.deleteResultsToAvoid()
 
         if not '--debug' in sys.argv:
             random.shuffle(self.items)
