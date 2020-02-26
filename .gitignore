@@ -1,9 +1,8 @@
 /.vscode
-/.vs
-*.sln
-*.pyproj
-*.sqlite
 /logs
+
+*.csv
+*.sqlite
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

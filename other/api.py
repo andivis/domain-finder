@@ -266,3 +266,12 @@ class Api:
             ])
 
         self.proxies = None
+
+        try:
+            import brotli
+        except ImportError as e:
+            logging.debug(e)
+            logging.error(f'You need to run "pip3 install brotlipy" or "pip install brotlipy" first, then restart this script')
+            logging.debug(traceback.format_exc())
+            input("Press enter to exit...")
+            exit()
